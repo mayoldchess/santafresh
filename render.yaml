@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: santa-chat
+    env: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: node server.mjs
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_TTS_VOICE_SANTA
+        value: alloy
+      - key: OPENAI_TTS_VOICE_ELF
+        value: amber

@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Santa Logo</title>
+  <desc id="desc">Minimal modern Santa face with hat and beard</desc>
+  <defs>
+    <linearGradient id="gHat" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#ef4444"/>
+      <stop offset="1" stop-color="#b91c1c"/>
+    </linearGradient>
+    <linearGradient id="gBeard" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f3f4f6"/>
+    </linearGradient>
+    <clipPath id="cCircle">
+      <circle cx="256" cy="256" r="224"/>
+    </clipPath>
+  </defs>
+
+  <!-- Soft background circle -->
+  <circle cx="256" cy="256" r="244" fill="#f8fafc"/>
+
+  <g clip-path="url(#cCircle)">
+    <!-- Hat -->
+    <path d="M32 190c84-70 252-70 336 0v28H32z" fill="url(#gHat)"/>
+    <circle cx="392" cy="190" r="36" fill="#ffffff" opacity="0.95"/>
+
+    <!-- Hat brim -->
+    <rect x="32" y="204" width="336" height="34" rx="17" fill="#ffffff"/>
+
+    <!-- Face -->
+    <ellipse cx="200" cy="270" rx="120" ry="105" fill="#fed7aa"/>
+    <!-- Eyes -->
+    <circle cx="160" cy="270" r="8" fill="#111827"/>
+    <circle cx="240" cy="270" r="8" fill="#111827"/>
+    <!-- Nose -->
+    <circle cx="200" cy="292" r="10" fill="#fca5a5"/>
+
+    <!-- Mustache -->
+    <path d="M120 300c18-14 40-18 80 0-40 10-62 10-80 0z" fill="#ffffff"/>
+    <path d="M200 300c40-18 62-14 80 0-18 10-40 10-80 0z" fill="#ffffff"/>
+
+    <!-- Beard -->
+    <path d="M88 310c20 56 60 108 112 124 52-16 92-68 112-124 10 80-34 156-112 176-78-20-122-96-112-176z"
+          fill="url(#gBeard)"/>
+
+    <!-- Smile (subtle) -->
+    <path d="M168 314c20 10 44 10 64 0" fill="none" stroke="#ef4444" stroke-width="6" stroke-linecap="round"/>
+  </g>
+
+  <!-- Subtle ring -->
+  <circle cx="256" cy="256" r="224" fill="none" stroke="#e5e7eb" stroke-width="2"/>
+</svg>

@@ -1,0 +1,26 @@
+<!doctype html>
+<meta charset="utf-8"/>
+<title>Santa — Voice Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<div style="font-family:-apple-system,system-ui,Arial;margin:24px">
+  <h1>🎅 Santa — Quick Check</h1>
+  <p><button id="knock">🚪 Knock Knock</button> <button id="start">Start Santa</button></p>
+  <div id="log" style="border:1px solid #ddd;border-radius:8px;padding:10px;height:240px;overflow:auto"></div>
+  <p>
+    <input id="msg" placeholder="Say something to Santa…" style="width:70%">
+    <button id="send">Send</button>
+  </p>
+</div>
+<script>
+  let a=null; const log=document.getElementById('log');
+  function line(who,txt){ const d=document.createElement('div'); d.textContent=who+': '+txt; log.appendChild(d); log.scrollTop=log.scrollHeight; }
+  async function speak(text, voiceRole='santa'){
+    try{ a&&a.pause(); const r=await fetch('/api/tts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text,voiceRole})});
+      const b=await r.blob(); const u=URL.createObjectURL(b); a=new Audio(u); await a.play(); a.onended=()=>URL.revokeObjectURL(u);
+    }catch(e){ line('ERR', e.message); }
+  }
+  document.getElementById('knock').onclick=()=> speak('Knock, knock!','elf');
+  document.getElementById('start').onclick=()=> { line('Santa','Ho ho ho! Say hi!'); speak('Ho ho ho! Say hi!','santa'); };
+  async function ask(t){ line('You',t); const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ text:t, session:{} })}); const d=await r.json(); line('Santa', d.reply); speak(d.reply,'santa'); }
+  document.getElementById('send').onclick=()=>{ const t=document.getElementById('msg').value.trim(); if(!t) return; document.getElementById('msg').value=''; ask(t); };
+</script>
