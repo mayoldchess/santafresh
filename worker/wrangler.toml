@@ -6,5 +6,3 @@ OPENAI_BASE = "https://api.openai.com"
 OPENAI_MODEL = "gpt-5"
 OPENAI_TTS_MODEL = "gpt-5-tts"
 OPENAI_VOICE = "alloy"
-[observability]
-enabled = true
