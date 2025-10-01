@@ -1,4 +1,8 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
-import App from './App.jsx'
-createRoot(document.getElementById('root')).render(<App />)
+createRoot(document.getElementById('root')).render(
+  <div>
+    <h1>Elf Chat setup</h1>
+    <p>Your site is deployed by GitHub Pages. Once your Worker is up, paste its URL here in your full UI build.</p>
+  </div>
+)
