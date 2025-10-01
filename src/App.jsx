@@ -1,317 +1,175 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import html2pdf from "html2pdf.js";
-import { z } from "zod";
-import { ensureAudio, playKnock, startMusic, stopMusic } from "./audio";
+import { useEffect, useRef, useState } from 'react'
+import './App.css'
+import ky from 'ky'
 
-const API_BASE = import.meta.env.VITE_API_BASE || "";
-
-const childSchema = z.object({
-  name: z.string().min(1).max(20),
-  age: z.string().optional()
-});
-
-const SYS_PROMPT = `
-You are Santa Claus chatting with a child in a friendly, funny, kind tone.
-Kid-safety rules:
-- No collection of addresses, last names, phone numbers, school names, or exact locations.
-- If a child tries to share personal details, gently say you do not need that and change the topic.
-- Encourage kindness, gratitude, and creativity.
-- No scary content. No swear words. No medical or legal advice.
-- Keep answers short, 1 to 3 sentences. Ask simple questions to build a wishlist.
-Flow:
-- Greet the child by first name only.
-- Ask about toys or games, books or art, clothes or sports, and fun experiences.
-- Summarize what they like so far. Ask one follow up question.
-- End with cheer, mention elves, and offer to create a letter to Santa.
-`;
-
-const hasSpeech = typeof window !== "undefined" && (("webkitSpeechRecognition" in window) || ("SpeechRecognition" in window));
-const SR = typeof window !== "undefined" ? (window.SpeechRecognition || window.webkitSpeechRecognition) : null;
-
-function elfSay(text){
-  try{
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.pitch = 1.4;
-    utt.rate = 1.05;
-    utt.volume = 1;
-    const voices = window.speechSynthesis.getVoices();
-    const pick = voices.find(v => /english|en/i.test(v.lang) && /child|girl|boy|female|samantha|victoria|google uk english female/i.test(v.name)) || voices[0];
-    if(pick) utt.voice = pick;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utt);
-  }catch{}
+const API = (path) => {
+  const base = import.meta.env.VITE_WORKER_URL || localStorage.getItem('worker_url') || ''
+  return base ? `${base}${path}` : path
 }
 
-export default function App(){
-  const [parentEmail, setParentEmail] = useState("");
-  const [kidName, setKidName] = useState("");
-  const [age, setAge] = useState("");
-  const [consent, setConsent] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
-  const [thinking, setThinking] = useState(false);
-  const [wishlist, setWishlist] = useState({Toys:[],Books:[],Games:[],Clothes:[],Experiences:[],Other:[]});
-  const [audioReady, setAudioReady] = useState(false);
-  const [musicMuted, setMusicMuted] = useState(false);
-  const [consentStage, setConsentStage] = useState("idle");
-  const chatRef = useRef(null);
-  const recogRef = useRef(null);
+// Elf persona prompt for GPT-5
+const ELF_SYSTEM = {
+  role: 'system',
+  content:
+    "You are 'Nimbe the Helpful Elf'. Speak warmly. Short sentences. Friendly humor. Explain things clearly to kids and parents. If the user says 'knock knock', run a kid-friendly knock-knock routine. Keep it safe and polite."
+}
 
-  function scrollChat(){ setTimeout(()=>{ if(chatRef.current) chatRef.current.scrollTop = chatRef.current.scrollHeight }, 10); }
-  function addSanta(text){ setMessages(m=>[...m,{role:"santa", text}]); scrollChat(); }
-  function addKid(text){ setMessages(m=>[...m,{role:"kid", text}]); scrollChat(); }
-  function addElf(text){ setMessages(m=>[...m,{role:"elf", text}]); scrollChat(); elfSay(text); }
+// Parent consent explainer text, rendered to TTS
+const CONSENT_SPEECH = `
+Hello, I am Nimbe the Helpful Elf.
+Before we start, I need a parent or guardian to agree.
+This chat uses artificial intelligence and voice. We only use it to answer questions and make fun stories. 
+If you agree, please press I Agree so your child can continue. Thank you.
+`
 
-  useEffect(()=>{ if(typeof window !== "undefined"){ window.speechSynthesis.onvoiceschanged = ()=>{} } },[]);
+export default function App() {
+  const [consent, setConsent] = useState(() => localStorage.getItem('parent_consent') === 'yes')
+  const [workerUrl, setWorkerUrl] = useState(localStorage.getItem('worker_url') || '')
+  const [busy, setBusy] = useState(false)
+  const [messages, setMessages] = useState([
+    ELF_SYSTEM,
+    { role: 'assistant', content: "Nimbe here, a cheerful elf, tap Voice or say knock knock to begin." }
+  ])
+  const audioRef = useRef(null)
+  const [transcript, setTranscript] = useState([])
 
-  function onKnock(){
-    ensureAudio();
-    playKnock();
-    if(!musicMuted){ startMusic(); }
-    setAudioReady(true);
-    setConsentStage("intro");
-    setTimeout(()=>{
-      addElf("Knock knock. Elf here. I handle consent with maximum sparkle.");
-      setTimeout(()=>addElf("Parent, please say: I consent."), 600);
-    }, 200);
+  useEffect(() => { if (workerUrl) localStorage.setItem('worker_url', workerUrl) }, [workerUrl])
+
+  // TTS helper
+  const speak = async (text) => {
+    const arr = await ky.post(API('/api/tts'), { json: { text } }).arrayBuffer()
+    const blob = new Blob([arr], { type: 'audio/mpeg' })
+    const url = URL.createObjectURL(blob)
+    audioRef.current.src = url
+    await audioRef.current.play().catch(()=>{})
   }
 
-  function startVoiceConsent(){
-    try{
-      if(!hasSpeech || !SR) { setConsentStage("fallback"); addElf("Voice is not supported in this browser. Please tick consent below."); return }
-      const r = new SR();
-      recogRef.current = r;
-      r.lang = "en-US";
-      r.continuous = false;
-      r.interimResults = true;
-      setConsentStage("listening");
-      addElf("Listening. Say I consent.");
-      r.onresult = (ev)=>{
-        let txt = "";
-        for(let i=ev.resultIndex;i<ev.results.length;i++){
-          txt += ev.results[i][0].transcript;
-        }
-        if(/i consent|i agree|yes i consent/i.test(txt)){
-          r.stop();
-          setConsent(true);
-          setConsentStage("done");
-          addElf("Yippee. Consent captured. Opening the Santa line.");
-        }
-      };
-      r.onerror = ()=>{ setConsentStage("fallback"); addElf("I could not hear it. You can tick the consent box."); };
-      r.onend = ()=>{ if(!consent && consentStage !== "fallback"){ setConsentStage("fallback"); addElf("I did not catch that. You can also tick the box."); } };
-      r.start();
-    }catch{
-      setConsentStage("fallback");
-      addElf("Voice failed. Please tick the consent box.");
+  // Call model
+  const ask = async (text) => {
+    const newMsgs = [...messages, { role: 'user', content: text }]
+    setMessages(newMsgs); setBusy(true)
+    try {
+      const res = await ky.post(API('/api/chat'), { json: { messages: newMsgs.slice(-20) } }).json()
+      const reply = res.text ?? '(no reply)'
+      const updated = [...newMsgs, { role: 'assistant', content: reply }]
+      setMessages(updated)
+      await speak(reply)
+    } catch (e) {
+      const updated = [...newMsgs, { role: 'assistant', content: `Error: ${e.message}` }]
+      setMessages(updated)
+    } finally { setBusy(false) }
+  }
+
+  // Mic via Web Speech API
+  const recordOnce = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+    if (!SR) { alert('SpeechRecognition not available'); return }
+    const r = new SR()
+    r.lang = 'en-US'
+    r.interimResults = false
+    r.maxAlternatives = 1
+    r.onresult = (ev) => {
+      const text = ev.results[0][0].transcript
+      setTranscript(t => [...t, { role: 'you', text }])
+      ask(text)
     }
+    r.onerror = () => alert('Mic error')
+    r.start()
   }
 
-  async function startChat(){
-    try{ childSchema.parse({name:kidName, age:age || undefined}); }
-    catch{ alert("Please enter a first name up to 20 letters."); return }
-    if(!consent || !parentEmail){ alert("Parent email and consent are required."); return }
-    setStarted(true);
-    addSanta(`Ho ho ho, hello ${kidName}! What made you smile this year?`);
-    addSanta("Tell me your wishlist. Toys or games. Books or art. Clothes or sports. Or a fun experience.");
+  const knockKnock = async () => {
+    // Simple pre-scripted flow to guarantee kid-friendly fun, then hand back to model
+    const lines = [
+      "Knock knock.",
+      "Who is there?",
+      "Snow.",
+      "Snow who?",
+      "Snow much fun to meet you. I am Nimbe the Elf."
+    ]
+    for (const line of lines) { await speak(line) }
+    await ask("Tell a short wintery elf joke and invite a question.")
   }
 
-  function safeCategorize(text){
-    const t = text.toLowerCase();
-    const push = (k,v)=>setWishlist(w=>({...w,[k]:[...new Set([...w[k], v])] }));
-    if(t.match(/lego|doll|car|train|plush/)) push("Toys", text);
-    else if(t.match(/book|comic|draw|marker|paint/)) push("Books", text);
-    else if(t.match(/game|switch|ps|xbox/)) push("Games", text);
-    else if(t.match(/shirt|hoodie|shoe|sock|cap/)) push("Clothes", text);
-    else if(t.match(/trip|park|museum|zoo|ski|lake/)) push("Experiences", text);
-    else push("Other", text);
+  const playConsent = async () => {
+    await speak(CONSENT_SPEECH)
   }
 
-  async function send(){
-    const text = input.trim();
-    if(!text) return;
-    setInput("");
-    addKid(text);
-    safeCategorize(text);
-    setThinking(true);
-    try{
-      const res = await fetch(`${API_BASE}/chat`, {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({
-          system: SYS_PROMPT,
-          kidName,
-          age,
-          messages: messages.concat([{role:"kid", text}]).slice(-12)
-        })
-      });
-      if(!res.ok) throw new Error("Santa is feeding reindeer.");
-      const data = await res.json();
-      addSanta(data.reply);
-    }catch(e){
-      addSanta("Oops. My sleigh hit a snow cloud. Please try again.");
-    }finally{
-      setThinking(false);
-    }
+  if (!consent) {
+    return (
+      <div className="container">
+        <div className="app">
+          <div className="header">
+            <div className="elfface" />
+            <h1 className="h1">Nimbe the Helpful Elf</h1>
+          </div>
+          <div className="panel">
+            <div className="card">
+              <div className="label">Why we ask for consent</div>
+              <p className="small">
+                This app uses voice and AI to chat. A parent or guardian must agree before a child can use it.
+              </p>
+              <div className="row">
+                <button className="button warn" onClick={playConsent}>Play audio explainer</button>
+                <button
+                  className="button"
+                  onClick={() => { localStorage.setItem('parent_consent','yes'); setConsent(true) }}
+                >I Agree</button>
+              </div>
+            </div>
+            <audio ref={audioRef} controls />
+            <div className="card">
+              <div className="label">Worker URL</div>
+              <div className="row">
+                <input className="input" placeholder="https://YOURSUBDOMAIN.workers.dev" value={workerUrl} onChange={e=>setWorkerUrl(e.target.value)} />
+                <button className="button alt" onClick={()=>localStorage.setItem('worker_url', workerUrl)}>Save</button>
+              </div>
+              <p className="small">No keys in the browser. The Worker proxies to OpenAI.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
   }
-
-  function makeLetterPDF(){
-    const el = document.createElement("div");
-    el.style.padding = "24px";
-    el.style.fontFamily = "Georgia, serif";
-    el.innerHTML = `
-      <div style="border:6px solid #e71d36;border-radius:16px;padding:20px;">
-        <h1 style="text-align:center;margin:0 0 10px 0;">Letter to Santa</h1>
-        <p>Dear Santa,</p>
-        <p>My name is <strong>${kidName}</strong>${age ? ", I am " + age + " years old." : "."}</p>
-        <p>Here is my wishlist:</p>
-        ${Object.entries(wishlist).map(([k,vs])=>vs.length?`
-          <h3>${k}</h3>
-          <ul>${vs.map(v=>`<li>${v}</li>`).join("")}</ul>
-        `:"").join("")}
-        <p>Thank you for all your work with the elves.</p>
-        <p>With kindness,<br/>${kidName}</p>
-      </div>`;
-    html2pdf().set({
-      margin: 10, filename: `Letter_to_Santa_${kidName || "Friend"}.pdf`,
-      image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 },
-      jsPDF: { unit: "mm", format: "a4", orientation: "portrait" }
-    }).from(el).save();
-  }
-
-  function makeCertificatePDF(){
-    const el = document.createElement("div");
-    el.style.padding = "24px";
-    el.style.fontFamily = "Georgia, serif";
-    el.innerHTML = `
-      <div style="border:10px double #2a9d8f;border-radius:16px;padding:30px;text-align:center;">
-        <h1 style="margin:0 0 8px 0;">Nice List Certificate</h1>
-        <p>This certifies that</p>
-        <h2 style="margin:6px 0;">${kidName || "A Kind Kid"}</h2>
-        <p>has shown kindness, effort, and holiday spirit.</p>
-        <p>Signed by Santa and the Elves</p>
-        <p style="margin-top:20px;font-size:12px;color:#666;">For fun only.</p>
-      </div>`;
-    html2pdf().set({
-      margin: 10, filename: `Nice_List_${kidName || "Friend"}.pdf`,
-      image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 },
-      jsPDF: { unit: "mm", format: "a4", orientation: "landscape" }
-    }).from(el).save();
-  }
-
-  const wishlistHasItems = useMemo(()=>Object.values(wishlist).some(v=>v.length),[wishlist]);
 
   return (
     <div className="container">
-      <div className="card">
+      <div className="app">
         <div className="header">
-          <div className="santa">🎅</div>
-          <div>
-            <h2 style={{margin:"0"}}>Santa Chat</h2>
-            <div className="small">Kid safe chat with elf consent, wishlist, and PDFs</div>
-          </div>
-          <span className="badge">Voice consent</span>
-          <span className="badge">No exact locations</span>
-          <button className="btn ghost mute" onClick={()=>{
-            if(musicMuted){ setMusicMuted(false); startMusic(); } else { setMusicMuted(true); stopMusic(); }
-          }}>{musicMuted ? "Unmute music" : "Mute music"}</button>
+          <div className="elfface" />
+          <h1 className="h1">Elf Chat, GPT-5</h1>
         </div>
 
-        {!audioReady ? (
-          <div className="center">
-            <button className="btn warning" onClick={onKnock}>🔔 Knock Knock</button>
-            <div className="small">Click to enter the workshop. This enables sound.</div>
+        <div className="panel">
+          <div className="row">
+            <button className="button" onClick={recordOnce} disabled={busy}>Voice</button>
+            <button className="button alt" onClick={()=>ask('knock knock')} disabled={busy}>Ask “knock knock”</button>
+            <button className="button warn" onClick={knockKnock} disabled={busy}>Elf Knock Knock (scripted)</button>
           </div>
-        ) : !consent ? (
-          <>
-            <div className="msg elf"><div className="bubble"><div className="small">Elf</div>Hello. I am Twinkle the Consent Elf. I am tiny but mighty in paperwork.</div></div>
-            <div className="alert">
-              Parent, we do not collect addresses, last names, phone numbers, school names, or exact locations. To continue, please say out loud: <b>I consent</b>. Then I open the line to Santa.
-            </div>
-            <div className="row">
-              <label style={{width:"160px"}}>Parent email</label>
-              <input value={parentEmail} onChange={e=>setParentEmail(e.target.value)} placeholder="parent@example.com" />
-            </div>
-            <div className="row" style={{marginTop:"6px"}}>
-              <label style={{width:"160px"}}>Child first name</label>
-              <input value={kidName} onChange={e=>setKidName(e.target.value)} placeholder="Sophie" />
-            </div>
-            <div className="row">
-              <label style={{width:"160px"}}>Age (optional)</label>
-              <input value={age} onChange={e=>setAge(e.target.value)} placeholder="10" />
-            </div>
 
-            <div className="row" style={{marginTop:"10px"}}>
-              <button className="btn" onClick={startVoiceConsent}>🎤 Start voice consent</button>
-              <span className="small">Browser listens for: I consent</span>
-            </div>
-            {consentStage==="listening" && <div className="msg elf"><div className="bubble"><div className="small">Elf</div>I am listening. Speak clearly and cheerfully.</div></div>}
-            {(consentStage==="fallback") && (
-              <div className="row" style={{marginTop:"10px"}}>
-                <input type="checkbox" id="cc" checked={consent} onChange={e=>setConsent(e.target.checked)} />
-                <label htmlFor="cc">I am the parent or guardian. I consent.</label>
-              </div>
-            )}
-            <div style={{marginTop:"10px"}}>
-              <button className="btn secondary" onClick={startChat}>Enter Santa chat</button>
-            </div>
-          </>
-        ) : !started ? (
-          <>
-            <div className="msg elf"><div className="bubble"><div className="small">Elf</div>Consent locked in. Santa is all ears, jingle and ready.</div></div>
-            <div className="row">
-              <label style={{width:"160px"}}>Parent email</label>
-              <input value={parentEmail} onChange={e=>setParentEmail(e.target.value)} placeholder="parent@example.com" />
-            </div>
-            <div className="row">
-              <label style={{width:"160px"}}>Child first name</label>
-              <input value={kidName} onChange={e=>setKidName(e.target.value)} placeholder="Sophie" />
-            </div>
-            <div className="row">
-              <label style={{width:"160px"}}>Age (optional)</label>
-              <input value={age} onChange={e=>setAge(e.target.value)} placeholder="10" />
-            </div>
-            <div style={{marginTop:"10px"}}>
-              <button className="btn" onClick={startChat}>Chat with Santa</button>
-            </div>
-          </>
-        ):(
-          <>
-            <div ref={chatRef} className="chat">
-              {messages.map((m,i)=>(
-                <div key={i} className={"msg " + (m.role==="santa"?"santa": m.role==="elf"?"elf":"kid")}>
-                  <div className="bubble">
-                    <div className="small">{m.role==="santa"?"Santa": m.role==="elf"?"Elf":"You"}</div>
-                    <div>{m.text}</div>
-                  </div>
-                </div>
+          <div className="card">
+            <div className="label">Transcript</div>
+            <div className="transcript">
+              {messages.filter(m=>m.role!=='system').map((m,i)=>(
+                <div key={i} className="msg"><span className="role">{m.role}:</span> {m.content}</div>
               ))}
-              {thinking && <div className="msg santa"><div className="bubble">Checking my list twice...</div></div>}
-            </div>
-            <div className="row" style={{marginTop:"10px"}}>
-              <input value={input} onChange={e=>setInput(e.target.value)} placeholder="Tell Santa what you wish for..." onKeyDown={e=>{if(e.key==="Enter") send()}}/>
-              <button className="btn" onClick={send}>Send</button>
-              <button className="btn secondary" onClick={makeLetterPDF} disabled={!wishlistHasItems}>Letter PDF</button>
-              <button className="btn ghost" onClick={makeCertificatePDF}>Nice List</button>
-            </div>
-
-            <h3 style={{marginTop:"16px"}}>Wishlist</h3>
-            <div className="wishlist">
-              {Object.entries(wishlist).map(([k,vs])=>(
-                <div key={k} className="category">
-                  <h4>{k}</h4>
-                  {vs.length? <ul>{vs.map((v,i)=><li key={i}>{v}</li>)}</ul> : <div className="small">Empty</div>}
-                </div>
+              {transcript.map((t,i)=>(
+                <div key={'u'+i} className="msg"><span className="role">you:</span> {t.text}</div>
               ))}
             </div>
+          </div>
 
-            <footer>
-              <p>We keep things gentle and safe for kids. Personal details are not needed.</p>
-            </footer>
-          </>
-        )}
+          <div className="card">
+            <div className="label">Worker URL</div>
+            <div className="row">
+              <input className="input" placeholder="https://YOURSUBDOMAIN.workers.dev" value={workerUrl} onChange={e=>setWorkerUrl(e.target.value)} />
+              <button className="button alt" onClick={()=>localStorage.setItem('worker_url', workerUrl)}>Save</button>
+            </div>
+            <p className="small">Tip, test health at /api/health on your Worker.</p>
+          </div>
+
+          <audio ref={audioRef} controls />
+        </div>
       </div>
     </div>
-  );
+  )
 }
