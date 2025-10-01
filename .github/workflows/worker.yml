@@ -7,21 +7,41 @@ permissions:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      CF_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CF_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Wrangler
+        run: npm i -g wrangler@3.78.10
+
+      - name: Whoami, verify auth
+        run: wrangler whoami --api-token "$CF_API_TOKEN" --account-id "$CF_ACCOUNT_ID"
+
       - name: Ensure workers.dev subdomain
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: worker
-          command: subdomain set ${{ github.repository_owner }} || echo "ok"
+        run: wrangler subdomain set "${{ github.repository_owner }}" --api-token "$CF_API_TOKEN" --account-id "$CF_ACCOUNT_ID" || true
+
+      - name: Put OPENAI_API_KEY secret
+        working-directory: worker
+        run: |
+          echo -n "$OPENAI_API_KEY" | wrangler secret put OPENAI_API_KEY \
+            --api-token "$CF_API_TOKEN" --account-id "$CF_ACCOUNT_ID" --yes
+
       - name: Publish Worker
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          workingDirectory: worker
-          command: publish
-          secrets: |
-            OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}
+        working-directory: worker
+        run: wrangler publish --api-token "$CF_API_TOKEN" --account-id "$CF_ACCOUNT_ID" --minify
+
+      - name: Print health URLs
+        run: |
+          SUB=$(wrangler subdomain get --api-token "$CF_API_TOKEN" --account-id "$CF_ACCOUNT_ID" | sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' | head -n1 || true)
+          echo "workers.dev subdomain: $SUB"
+          echo "Health (try both):"
+          echo "  https://santafresh-worker.$SUB.workers.dev/api/health"
+          echo "  https://$SUB.workers.dev/api/health"
